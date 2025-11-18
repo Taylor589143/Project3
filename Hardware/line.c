@@ -1,292 +1,318 @@
-#include "Line.h"
+#include "line.h"
+#include "Sensor.h"
 #include "motor.h"
-#include "sensor.h"
-#include "usart.h"
-#include "iic.h"
 #include "delay.h"
+#include "Serial.h"
+#include "pid.h"
+#include <stdio.h>
 
-unsigned char lukou_num = 0; //全局变量定义检测到路口的次数
+// 全局变量定义
+unsigned char lukou_num = 0;
+unsigned char last_line_status = 5; // 初始状态设为居中
+unsigned int straight_count = 0;
 
-/*************************************
-*函数名称：track_zhixian1()
-*函数功能：直线循迹
-*参数：
-*说明：数字口获取数字量
-*			白底黑线，线宽2厘米，其他线宽根据实际情况改写，提供的程序只供参考。
-**************************************/
-void track_zhixian1()
-{    
-	unsigned char num = 0,i;  //num个灯压线认为是到达路口
-	
-	for(i=0;i<2;i++) //循环检测路口2次
-	{
-		if(D1 == 1)  num++;	if(D2 == 1)  num++;	if(D3 == 1)  num++;	if(D4 == 1)  num++;
-		if(D5 == 1)  num++;	
-		
-		if(num >= (ADC_N)) //大于等于ADC_N个灯压线认为是到达路口
-		{ 
-			lukou_num++; 
-			if(lukou_num == 1)	 Delay_ms(10); //第一次检测到延时10ms，消抖操作
-		}  
-		num = 0;
-	}
-	if(lukou_num >= 2) { lukou_num = 0; motor(0,0); Delay_ms(1000);Delay_ms(1000);}  //检测2次都是路口后才认为是真正到达路口，防止误判
-                                                                                   //这里的逻辑是1路在小车的左边，ADC_N路在小车的右边
-																																										 //5 4321（路）
-  if((D1 == 1)&&(D2 == 0)&&(D3 == 0)&&(D4 == 0)&&(D5 == 0))        motor(0,40);      //0 0001
-  else if((D1 == 1)&&(D2 == 1)&&(D3 == 0)&&(D4 == 0)&&(D5 == 0))   motor(10,40);     //0 0011
-  else if((D1 == 0)&&(D2 == 1)&&(D3 == 0)&&(D4 == 0)&&(D5 == 0))   motor(25,40);     //0 0010
-  else if((D1 == 0)&&(D2 == 1)&&(D3 == 1)&&(D4 == 0)&&(D5 == 0))   motor(35,40);     //0 0110
-  else if((D1 == 0)&&(D2 == 0)&&(D3 == 1)&&(D4 == 0)&&(D5 == 0))   motor(40,40);     //0 0100 //正中间位置
-  else if((D1 == 0)&&(D2 == 0)&&(D3 == 1)&&(D4 == 1)&&(D5 == 0))   motor(40,35);     //0 1100
-  else if((D1 == 0)&&(D2 == 0)&&(D3 == 0)&&(D4 == 1)&&(D5 == 0))   motor(40,25);     //0 1000
-  else if((D1 == 0)&&(D2 == 0)&&(D3 == 0)&&(D4 == 1)&&(D5 == 1))   motor(40,10);     //1 1000
-  else if((D1 == 0)&&(D2 == 0)&&(D3 == 0)&&(D4 == 0)&&(D5 == 1))   motor(40,0);      //1 0000
-  else   motor(20,20);
+// PID变量
+static float pid_integral = 0;
+static float pid_last_error = 0;
 
-}
-/*************************************
-*函数名称：track_zhixian2()
-*函数功能：直线循迹
-*参数：
-*说明：串口获取数字量数据,IIC获取数字量数据
-*			白底黑线，线宽2厘米，其他线宽根据实际情况改写，提供的程序只供参考。
-**************************************/
-void track_zhixian2()
-{	
-	unsigned int Temp[1] = { 0 };       //数据缓存区
-	unsigned char num = 0,Temp_data = 0,i;       //数据临时存放
-
-	Read_Data1(0x01,Temp);	//Read_IICData1(0x01,Temp);
-
-
-	Temp_data = Temp[0];
-	for(i=0;i<2;i++) //循环检测路口2次
-	{
-		while(Temp_data)
-		{
-			Temp_data &= (Temp_data - 1);  //判断该字节中含有“1”的个数
-			num++;
-		}	
-		if(num >= (ADC_N)) //大于等于ADC_N个灯压线认为是到达路口
-		{ 
-			lukou_num++; 
-			if(lukou_num == 1)	Delay_ms(10); //第一次检测到延时10ms，消抖操作
-		}  
-		num = 0;
-	}
-	if(lukou_num >= 2) { lukou_num = 0; motor(0,0); Delay_ms(1000);Delay_ms(1000);}  //检测2次都是路口后才认为是真正到达路口，防止误判
-
-	switch(Temp[0])                           //这里的逻辑是1路在小车的左边，ADC_N路在小车的右边
-	{                                         //5 4321 （路）
-		case 0x01:		motor(0,40);	break;      //0 0001
-		case 0x03:		motor(10,40);	break;      //0 0011
-		case 0x02:		motor(25,40);	break;      //0 0010
-		case 0x06:		motor(35,40);	break;      //0 0110
-		case 0x04:		motor(40,40);	break;      //0 0100	//正中间位置
-		case 0x0C:		motor(40,35);	break;      //0 1100
-		case 0x08:		motor(40,25);	break;      //0 1000
-		case 0x18:		motor(40,10);	break;      //1 1000
-		case 0x10:		motor(40,0);	break;      //1 0000			
-		
-		default :			motor(20,20);	break;
-	}
-}
-/*************************************
-*函数名称：track_PID1
-*函数功能：直线循迹，用串口线连接，输出偏差值等位置数据
-*参数：pwm：最大速度值(例程取值范围0至90)，P：比例系数(例程取值范围0.01至0.1)
-*说明：
-*			白底黑线，线宽2厘米，其他线宽根据实际情况改写，提供的程序只供参考。
-**************************************/
-void track_PID1(int pwm,float P)
+/**
+  * @brief  循迹系统初始化
+  */
+void Track_Init(void)
 {
-//	static float Integral_error,Last_error;
-	static int L_Pwm,R_Pwm;			 //左右轮速度
-	unsigned int Temp[2] = { 0 }; //数据缓存区
-	int error = 0;         //偏差值
-//	float I = 0,D = 0;		 //积分系数，微分系数，取值范围0.01-0.9
-	
-	Read_Data2(0x01,Temp);	//Read_IICData2(0x01,Temp);
-
-	if((Temp[0]&0x1F) != 0)		//在线上
-	{	
-		if((Temp[0]&0x1F) != ADC_N)		//部分在线上
-		{
-			if(((Temp[0] >> 5)%2) == 0)
-			{
-				error = -Temp[1];
-			}
-			else if(((Temp[0] >> 5)%2) == 1)
-			{
-				error = Temp[1];
-			}
-//			Integral_error += error;
-			
-//			L_Pwm = (pwm+(error*P+Integral_error*I+(error-Last_error)*D));
-//			R_Pwm = (pwm-(error*P+Integral_error*I+(error-Last_error)*D));
-			L_Pwm = pwm+error*P;
-			R_Pwm = pwm-error*P;	
-//			Last_error = error;
-//////////////////最高速和最低速限制///////////////////////////
-			if(L_Pwm > (pwm+10))
-				L_Pwm = (pwm+10);
-			if(R_Pwm > (pwm+10))
-				R_Pwm = (pwm+10);
-			if(L_Pwm <= 15)
-				L_Pwm = 15;
-			if(R_Pwm <= 15)
-				R_Pwm = 15;
-//////////////////最高速和最低速限制///////////////////////////
-			motor(L_Pwm,R_Pwm);
-		}
-		else if((Temp[0]&0x1F) == ADC_N)		//全部在线上
-		{
-			motor(0,0);
-			Delay_ms(1000);Delay_ms(1000);
-		}		
-	}
-	else		//出线
-	{
-		if(((Temp[0] >> 6)%2) == 0)		//左出线
-		{
-			motor(10,pwm);
-		}
-		else if(((Temp[0] >> 6)%2) == 1)		//右出线
-		{
-			motor(pwm,10);
-		}
-	}
+    lukou_num = 0;
+    last_line_status = 5;
+    straight_count = 0;
+    pid_integral = 0;
+    pid_last_error = 0;
+    
+    printf("Track System Initialized\r\n");
+    printf("Straight Speed: %d, Cross Delay: %dms\r\n", STRAIGHT_SPEED, CROSS_DELAY);
 }
-/*************************************
-*函数名称：track_PID2
-*函数功能：直线循迹，用串口线连接，输出模拟量数据
-*参数：pwm：最大速度值(例程取值范围0至90)，P：比例系数(例程取值范围0.01至0.1)
-*说明：
-*			白底黑线，线宽2厘米，其他线宽根据实际情况改写，提供的程序只供参考。
-**************************************/
-void track_PID2(int pwm,float P)
+
+/**
+  * @brief  处理十字路口
+  */
+void Handle_Crossroad(void)
 {
-//	static float Integral_error=0,Last_error=0;
-	static int L_Pwm=0,R_Pwm=0;			 //左右轮速度
-	unsigned char i;
-	int H_SETPOINT = 3000; //灰度传感器居中参照值 （需要修改）
-	int error = 0;         //偏差值
-	float All_Channel = 0.0;   //灰度值总和
-	float All_Result = 0.0;    //处理过后的灰度总和
-	unsigned int Finall_Result = 0; //最终处理值
-//	float I = 0,D = 0;		 //积分系数，微分系数，取值范围0.01-0.9
-	unsigned int Temp[ADC_N] = { 0 };     //数据缓存区ADC_N个模拟值
-
-	Read_Data3(0x01,Temp);	//Read_IICData3(0x01,Temp);
-
-	for(i=0; i<ADC_N; i++) //ADC_N个模拟值
-	{
-		All_Channel = All_Channel+Temp[i];
-		All_Result  = All_Result+(Temp[i]*(i+1));
-	}
-	
-	Finall_Result = All_Result/All_Channel*1000;
-	error = H_SETPOINT - Finall_Result;
-//	Integral_error += error;
-	
-///////////////场地背景色比线的颜色深/////////////////////////////////	
-//	L_Pwm = (pwm-(error*P+Integral_error*I+(error-Last_error)*D));
-//	R_Pwm = (pwm+(error*P+Integral_error*I+(error-Last_error)*D));
-//	L_Pwm = pwm-error*P;
-//	R_Pwm = pwm+error*P;	
-
-///////////////场地背景色比线的颜色深/////////////////////////////////	
-
-///////////////场地背景色比线的颜色浅/////////////////////////////////	
-//	L_Pwm = (pwm+(error*P+Integral_error*I+(error-Last_error)*D));
-//	R_Pwm = (pwm-(error*P+Integral_error*I+(error-Last_error)*D));
-	L_Pwm = pwm+error*P;
-	R_Pwm = pwm-error*P;	
-///////////////场地背景色比线的颜色浅/////////////////////////////////	
-	
-//	Last_error = error;
-			
-//////////////////最高速和最低速限制///////////////////////////
-	if(L_Pwm > (pwm+10))
-		L_Pwm = (pwm+10);
-	if(R_Pwm > (pwm+10))
-		R_Pwm = (pwm+10);
-	if(L_Pwm <= 15)
-		L_Pwm = 15;
-	if(R_Pwm <= 15)
-		R_Pwm = 15;
-//////////////////最高速和最低速限制///////////////////////////
-	
-	motor(L_Pwm,R_Pwm);
+    printf("=== Crossroad Detected! Passing... ===\r\n");
+    
+    // 直行通过十字路口
+    motor(STRAIGHT_SPEED, STRAIGHT_SPEED);
+    Delay_ms(CROSS_DELAY);
+    
+    // 更新路口计数
+    lukou_num++;
+    
+    // 串口输出调试信息
+    printf("Crossroad passed! Count: %d\r\n", lukou_num);
+    
+    // 重置PID参数和计数器
+    pid_integral = 0;
+    pid_last_error = 0;
+    straight_count = 0;
 }
-/*************************************
-*函数名称：track_PID3
-*函数功能：直线循迹，用串口线连接，输出Temp[0]数字量、Temp[1]Temp[2]偏差值、Temp[3]~Temp[9]模拟量等数据
-*参数：pwm：最大速度值(例程取值范围0至90)，P：比例系数(例程取值范围0.01至0.1)
-*说明：
-*			白底黑线，线宽2厘米，其他线宽根据实际情况改写，提供的程序只供参考。
-**************************************/
-void track_PID3(int pwm,float P)
+
+/**
+  * @brief  处理急弯
+  */
+void Handle_Sharp_Turn(void)
 {
-//	static float Integral_error,Last_error;
-	static int L_Pwm,R_Pwm;			 //左右轮速度
-	unsigned int Temp[10] = { 0 };  //数据缓存区
-	int error = 0;         //偏差值
-//	float I = 0,D = 0;		 //积分系数，微分系数，取值范围0.01-0.1
-	
-	Read_Data4(0x01,Temp);	
-
-	if((Temp[1]&0x1F) != 0)		//在线上
-	{	
-		if((Temp[1]&0x1F) != ADC_N)		//部分在线上
-		{
-			if(((Temp[1] >> 5)%2) == 0)
-			{
-				error = -Temp[2];
-			}
-			else if(((Temp[1] >> 5)%2) == 1)
-			{
-				error = Temp[2];
-			}
-//			Integral_error += error;
-			
-//			L_Pwm = (pwm+(error*P+Integral_error*I+(error-Last_error)*D));
-//			R_Pwm = (pwm-(error*P+Integral_error*I+(error-Last_error)*D));
-			L_Pwm = pwm+error*P;
-			R_Pwm = pwm-error*P;	
-			
-//			Last_error = error;
-//////////////////最高速和最低速限制///////////////////////////
-			if(L_Pwm > (pwm+10))
-				L_Pwm = (pwm+10);
-			if(R_Pwm > (pwm+10))
-				R_Pwm = (pwm+10);
-			if(L_Pwm <= 15)
-				L_Pwm = 15;
-			if(R_Pwm <= 15)
-				R_Pwm = 15;
-//////////////////最高速和最低速限制///////////////////////////
-			motor(L_Pwm,R_Pwm);
-		}
-		else if((Temp[1]&0x1F) == ADC_N)		//全部在线上
-		{
-			motor(0,0);
-			Delay_ms(1000);Delay_ms(1000);
-		}		
-	}
-	else		//出线
-	{
-		if(((Temp[1] >> 6)%2) == 0)		//左出线
-		{
-			motor(10,pwm);
-		}
-		else if(((Temp[1] >> 6)%2) == 1)		//右出线
-		{
-			motor(pwm,10);
-		}
-	}
+    Sensor_Read(); // 读取最新传感器数据
+    
+    // 检测急弯条件：只有最外侧传感器检测到黑线
+    if((L2 == 1 && L1 == 0 && M == 0 && R1 == 0 && R2 == 0) ||  // 10000 - 左急弯
+       (L2 == 0 && L1 == 0 && M == 0 && R1 == 0 && R2 == 1)) {  // 00001 - 右急弯
+        
+        printf("Sharp turn detected! Handling...\r\n");
+        
+        if(L2 == 1) { // 左急弯
+            motor(25, 70);
+            Delay_ms(SHARP_TURN_DELAY);
+            printf("Sharp left turn completed\r\n");
+        } else { // 右急弯
+            motor(70, 25);
+            Delay_ms(SHARP_TURN_DELAY);
+            printf("Sharp right turn completed\r\n");
+        }
+        
+        // 重置直行计数
+        straight_count = 0;
+    }
 }
 
+/**
+  * @brief  直线循迹 (状态机方法)
+  */
+void Track_Straight_Line(void)
+{
+    unsigned char line_status = Get_Line_Status();
+    
+    // 首先检查特殊状况
+    if(line_status == 12) { // 十字路口
+        Handle_Crossroad();
+        return;
+    }
+    
+    if(line_status == 11) { // 停车线
+        motor(0, 0);
+        printf("Stop line detected! Car stopped.\r\n");
+        Delay_ms(2000);
+        return;
+    }
+    
+    Handle_Sharp_Turn(); // 检查急弯
+    
+    // 状态机控制
+    switch(line_status) {
+        case 1: // 10000 - 严重偏左
+            motor(30, 75);
+            straight_count = 0;
+            //printf("Status: Severe Left\r\n");
+            break;
+            
+        case 2: // 11000 - 偏左
+            motor(40, 70);
+            straight_count = 0;
+            //printf("Status: Left\r\n");
+            break;
+            
+        case 3: // 01000 - 轻微偏左
+            motor(45, 65);
+            straight_count = 0;
+            break;
+            
+        case 4: // 01100 - 正常偏左
+            motor(50, 60);
+            straight_count = 0;
+            break;
+            
+        case 5: // 00100 - 居中
+            motor(STRAIGHT_SPEED, STRAIGHT_SPEED);
+            straight_count++;
+            // 连续直行时稍微加速
+            if(straight_count > 20) {
+                motor(STRAIGHT_SPEED + 10, STRAIGHT_SPEED + 10);
+            }
+            break;
+            
+        case 6: // 00110 - 正常偏右
+            motor(60, 50);
+            straight_count = 0;
+            break;
+            
+        case 7: // 00010 - 轻微偏右
+            motor(65, 45);
+            straight_count = 0;
+            break;
+            
+        case 8: // 00011 - 偏右
+            motor(70, 40);
+            straight_count = 0;
+            //printf("Status: Right\r\n");
+            break;
+            
+        case 9: // 00001 - 严重偏右
+            motor(75, 30);
+            straight_count = 0;
+            //printf("Status: Severe Right\r\n");
+            break;
+            
+        case 10: // 00000 - 丢失路线
+            printf("Line lost! Recovering...\r\n");
+            // 基于历史状态的智能恢复
+            if(last_line_status <= 4) {
+                motor(35, 60); // 上次在左侧，向右找线
+            } else if(last_line_status >= 6) {
+                motor(60, 35); // 上次在右侧，向左找线
+            } else {
+                motor(45, 45); // 不确定时低速前进
+            }
+            straight_count = 0;
+            break;
+            
+        default:
+            motor(50, 50); // 默认速度
+            break;
+    }
+    
+    last_line_status = line_status;
+}
 
+/**
+  * @brief  PID循迹控制
+  * @param  base_speed: 基础速度
+  * @param  kp: 比例系数
+  * @param  ki: 积分系数  
+  * @param  kd: 微分系数
+  */
+void Track_With_PID(int base_speed, float kp, float ki, float kd)
+{
+    unsigned char line_status = Get_Line_Status();
+    int error = 0;
+    
+    // 首先检查特殊状况
+    if(line_status == 12) { // 十字路口
+        Handle_Crossroad();
+        return;
+    }
+    
+    if(line_status == 11) { // 停车线
+        motor(0, 0);
+        printf("Stop line detected! Car stopped.\r\n");
+        Delay_ms(2000);
+        return;
+    }
+    
+    Handle_Sharp_Turn(); // 检查急弯
+    
+    // 根据循线状态计算偏差
+    switch(line_status) {
+        case 1:  error = -4; break;  // 严重偏左
+        case 2:  error = -3; break;  // 偏左
+        case 3:  error = -2; break;  // 轻微偏左
+        case 4:  error = -1; break;  // 正常偏左
+        case 5:  error = 0;  break;  // 居中
+        case 6:  error = 1;  break;  // 正常偏右
+        case 7:  error = 2;  break;  // 轻微偏右
+        case 8:  error = 3;  break;  // 偏右
+        case 9:  error = 4;  break;  // 严重偏右
+        case 10: // 丢失路线
+            // 使用历史偏差
+            error = (last_line_status <= 5) ? -3 : 3;
+            break;
+        default: error = 0; break;
+    }
+    
+    // PID计算
+    pid_integral += error;
+    
+    // 积分限幅
+    if(pid_integral > 100) pid_integral = 100;
+    if(pid_integral < -100) pid_integral = -100;
+    
+    float differential = error - pid_last_error;
+    
+    float adjust = error * kp + pid_integral * ki + differential * kd;
+    
+    // 针对18mm赛道调整控制力度
+    int left_speed = base_speed + adjust;
+    int right_speed = base_speed - adjust;
+    
+    pid_last_error = error;
+    
+    // 速度限制
+    if(left_speed > 100) left_speed = 100;
+    if(right_speed > 100) right_speed = 100;
+    if(left_speed < 30) left_speed = 30;
+    if(right_speed < 30) right_speed = 30;
+    
+    motor(left_speed, right_speed);
+    last_line_status = line_status;
+    
+    // 调试输出（可注释掉以减少串口负载）
+    // printf("PID - Error: %d, Adjust: %.1f, L:%d, R:%d\r\n", 
+    //        error, adjust, left_speed, right_speed);
+}
 
+/**
+  * @brief  高级循迹函数 (推荐使用)
+  * @说明：结合状态机和PID，适合18mm赛道
+  *       小偏差使用PID精细调整，大偏差使用状态机快速响应
+  */
+void Advanced_Tracking(void)
+{
+    unsigned char line_status = Get_Line_Status();
+    
+    // 优先处理特殊状况
+    if(line_status == 12) { // 十字路口
+        Handle_Crossroad();
+        return;
+    }
+    
+    if(line_status == 11) { // 停车线
+        motor(0, 0);
+        printf("Stop line detected! Car stopped.\r\n");
+        Delay_ms(2000);
+        return;
+    }
+    
+    Handle_Sharp_Turn(); // 检查急弯
+    
+    // 对于小偏差使用PID，大偏差使用状态机
+    if(line_status >= 3 && line_status <= 7) {
+        // 使用PID进行精细调整 (适合小偏差)
+        Track_With_PID(STRAIGHT_SPEED, 3.0, 0.05, 0.8);
+    } else {
+        // 使用状态机进行大范围调整 (适合大偏差和特殊情况)
+        Track_Straight_Line();
+    }
+}
+
+/**
+  * @brief  获取当前路口计数
+  */
+unsigned char Get_Crossroad_Count(void)
+{
+    return lukou_num;
+}
+
+/**
+  * @brief  重置循迹系统
+  */
+void Track_Reset(void)
+{
+    Track_Init();
+    printf("Track System Reset\r\n");
+}
+
+/**
+  * @brief  循迹状态调试输出
+  */
+void Track_Debug_Output(void)
+{
+    unsigned char line_status = Get_Line_Status();
+    
+    printf("Track Status: %d, Crossroads: %d, Straight Count: %d\r\n", 
+           line_status, lukou_num, straight_count);
+}
