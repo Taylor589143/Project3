@@ -1,9 +1,8 @@
-#include "line.h"
+#include "Line.h"
 #include "Sensor.h"
-#include "motor.h"
+#include "Motor.h"
 #include "delay.h"
 #include "Serial.h"
-#include "pid.h"
 #include <stdio.h>
 
 // 全局变量定义
@@ -11,27 +10,27 @@ unsigned char lukou_num = 0;
 unsigned char last_line_status = 5; // 初始状态设为居中
 unsigned int straight_count = 0;
 
-// PID变量
-static float pid_integral = 0;
-static float pid_last_error = 0;
+// PID变量 （用于循迹方向PID）
+static float pid_integral   = 0.0f;
+static float pid_last_error = 0.0f;
 
 /**
   * @brief  循迹系统初始化
   */
 void Track_Init(void)
 {
-    lukou_num = 0;
+    lukou_num        = 0;
     last_line_status = 5;
-    straight_count = 0;
-    pid_integral = 0;
-    pid_last_error = 0;
+    straight_count   = 0;
+    pid_integral     = 0;
+    pid_last_error   = 0;
     
     printf("Track System Initialized\r\n");
     printf("Straight Speed: %d, Cross Delay: %dms\r\n", STRAIGHT_SPEED, CROSS_DELAY);
 }
 
 /**
-  * @brief  处理十字路口
+* @brief  处理十字路口:直行通过
   */
 void Handle_Crossroad(void)
 {
@@ -47,7 +46,7 @@ void Handle_Crossroad(void)
     // 串口输出调试信息
     printf("Crossroad passed! Count: %d\r\n", lukou_num);
     
-    // 重置PID参数和计数器
+    // 重置PID参数和计数器 / 直行动作计数
     pid_integral = 0;
     pid_last_error = 0;
     straight_count = 0;
@@ -60,17 +59,22 @@ void Handle_Sharp_Turn(void)
 {
     Sensor_Read(); // 读取最新传感器数据
     
-    // 检测急弯条件：只有最外侧传感器检测到黑线
+    // 检测急弯条件：只有最外侧传感器检测到黑线才认为是急弯
     if((L2 == 1 && L1 == 0 && M == 0 && R1 == 0 && R2 == 0) ||  // 10000 - 左急弯
        (L2 == 0 && L1 == 0 && M == 0 && R1 == 0 && R2 == 1)) {  // 00001 - 右急弯
         
         printf("Sharp turn detected! Handling...\r\n");
         
-        if(L2 == 1) { // 左急弯
+        if(L2 == 1) 
+		{
+			// 左急弯
             motor(25, 70);
             Delay_ms(SHARP_TURN_DELAY);
             printf("Sharp left turn completed\r\n");
-        } else { // 右急弯
+        } 
+		else 
+		{
+			// 右急弯
             motor(70, 25);
             Delay_ms(SHARP_TURN_DELAY);
             printf("Sharp right turn completed\r\n");
@@ -89,12 +93,16 @@ void Track_Straight_Line(void)
     unsigned char line_status = Get_Line_Status();
     
     // 首先检查特殊状况
-    if(line_status == 12) { // 十字路口
+    if(line_status == 12) 
+	{
+		// 十字路口
         Handle_Crossroad();
         return;
     }
     
-    if(line_status == 11) { // 停车线
+    if(line_status == 11) 
+	{ 
+		// 停车线
         motor(0, 0);
         printf("Stop line detected! Car stopped.\r\n");
         Delay_ms(2000);
@@ -192,12 +200,16 @@ void Track_With_PID(int base_speed, float kp, float ki, float kd)
     int error = 0;
     
     // 首先检查特殊状况
-    if(line_status == 12) { // 十字路口
+    if(line_status == 12) 
+	{
+		// 十字路口
         Handle_Crossroad();
         return;
     }
     
-    if(line_status == 11) { // 停车线
+    if(line_status == 11) 
+	{ 
+		//停车线
         motor(0, 0);
         printf("Stop line detected! Car stopped.\r\n");
         Delay_ms(2000);
@@ -265,12 +277,16 @@ void Advanced_Tracking(void)
     unsigned char line_status = Get_Line_Status();
     
     // 优先处理特殊状况
-    if(line_status == 12) { // 十字路口
+    if(line_status == 12) 
+	{ 
+		// 十字路口
         Handle_Crossroad();
         return;
     }
     
-    if(line_status == 11) { // 停车线
+    if(line_status == 11) 
+	{ 
+		// 停车线
         motor(0, 0);
         printf("Stop line detected! Car stopped.\r\n");
         Delay_ms(2000);
@@ -280,10 +296,13 @@ void Advanced_Tracking(void)
     Handle_Sharp_Turn(); // 检查急弯
     
     // 对于小偏差使用PID，大偏差使用状态机
-    if(line_status >= 3 && line_status <= 7) {
-        // 使用PID进行精细调整 (适合小偏差)
-        Track_With_PID(STRAIGHT_SPEED, 3.0, 0.05, 0.8);
-    } else {
+    if(line_status >= 3 && line_status <= 7) 
+	{
+        // 使用PID进行精细调整 (适合小偏差)——关键修改：使用菜单中的Line_pid 的参数
+        Track_With_PID(STRAIGHT_SPEED, line_pid.kp, line_pid.ki, line_pid.kd);
+    } 
+	else 
+	{
         // 使用状态机进行大范围调整 (适合大偏差和特殊情况)
         Track_Straight_Line();
     }
