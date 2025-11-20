@@ -1,3 +1,6 @@
+#include "stm32f10x.h" //Device header
+#include "PID.h"
+#include "Menu.h"
 #include "key.h"
 #include "delay.h"
 
@@ -29,7 +32,7 @@ uint8_t Key_Scan(void)
                   GPIO_ReadInputDataBit(KEY_PORT, KEY_OK_PIN)==0 ||
                   GPIO_ReadInputDataBit(KEY_PORT, KEY_BACK_PIN)==0))
     {
-        delay_ms(10);
+        Delay_ms(10);
         key_up = 0;
         if(GPIO_ReadInputDataBit(KEY_PORT, KEY_UP_PIN)==0) return KEY_UP;
         else if(GPIO_ReadInputDataBit(KEY_PORT, KEY_DOWN_PIN)==0) return KEY_DOWN;
