@@ -2,10 +2,10 @@
 #define __MENU_H
 
 void Show_Main_Menu(void);
-void Show_LED_Menu(void);
-void Show_Angle_Menu(void);
-void Show_Image_Menu(void);
 void Show_PID_Menu(void);
 void Handle_Key(uint8_t key);
+
+extern uint8_t menu_state;
+extern uint8_t edit_mode;
 
 #endif
