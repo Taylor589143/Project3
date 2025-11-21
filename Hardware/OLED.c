@@ -319,3 +319,52 @@ void OLED_Init(void)
 		
 	OLED_Clear();				//OLED清屏
 }
+
+
+
+/**
+  * @brief  OLED显示浮点数
+  * @param  Line        行位置 1~4
+  * @param  Column      列位置 1~16（开始显示整数部分位置）
+  * @param  Number      要显示的浮点数
+  * @param  Intlength   整数部分显示位数（不含符号）
+  * @param  FracLength  小数部分显示位数
+  * @retval 无
+  */
+void OLED_ShowFloat(uint8_t Line, uint8_t Column,
+                    float Number, uint8_t Intlength, uint8_t FracLength)
+{
+    uint8_t  isNegative = 0;
+    uint32_t scale      = OLED_Pow(10, FracLength);   // 10^FracLength
+    uint32_t intPart    = 0;
+    uint32_t fracPart   = 0;
+    uint32_t scaled     = 0;
+
+    /* 处理符号位 */
+    if (Number < 0.0f)
+    {
+        isNegative = 1;
+        Number     = -Number;
+    }
+
+    /* 先把浮点数放大，再四舍五入到整数，减少浮点误差 */
+    scaled   = (uint32_t)(Number * scale + 0.5f);
+    intPart  = scaled / scale;
+    fracPart = scaled % scale;
+
+    /* 如果有符号，先显示 '-' 再把起始列右移一位 */
+    if (isNegative)
+    {
+        OLED_ShowChar(Line, Column, '-');
+        Column++;
+    }
+
+    /* 显示整数部分 */
+    OLED_ShowNum(Line, Column, intPart, Intlength);
+
+    /* 显示小数点 */
+    OLED_ShowChar(Line, Column + Intlength, '.');
+
+    /* 显示小数部分，不足位数自动补 0 */
+    OLED_ShowNum(Line, Column + Intlength + 1, fracPart, FracLength);
+}
