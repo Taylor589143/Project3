@@ -1,7 +1,7 @@
 #include "stm32f10x.h"
 #include "Sensor.h"
 #include "Delay.h"
-#include "usart.h"  // 用于调试输出
+#include "Serial.h"  // 用于调试输出
 
 // 传感器状态全局变量
 int L2 = 0, L1 = 0, M = 0, R1 = 0, R2 = 0;
