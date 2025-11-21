@@ -15,6 +15,9 @@ void PWM_Init(void);
 // 参数 speed     : 速度值，正数正转，负数反转，0停止
 void Motor_Set_Speed(uint8_t motor_num, int16_t speed);
 
+// 适配旧代码：同时设置左右两个电机速度
+void motor(int16_t left_speed, int16_t right_speed);
+
 // 电机处理函数（可扩展为闭环控制等）
 void Motor_Process(void);
 

@@ -130,3 +130,9 @@ void Motor_Set_Speed(uint8_t motor_num, int16_t speed)
         TIM_SetCompare4(TIM2, speed);
     }
 }
+
+void motor(int16_t left_speed, int16_t right_speed)
+{
+    Motor_Set_Speed(1, left_speed);   // 左轮
+    Motor_Set_Speed(2, right_speed);  // 右轮
+}
