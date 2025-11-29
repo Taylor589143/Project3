@@ -1,174 +1,167 @@
 #include "Encoder.h"
 
 /* ==========================================================
- * 编码器驱动模块（Encoder.c）
+ * 编码器驱动模块（简单版，不用指针数组）
  *
- * 功能：
- *  - 使用 TIM3 / TIM4 的编码器接口模式读取两路电机编码器
- *  - 提供“速度”（每调用一次的脉冲增量）和“累计位置”接口
- *
- * 约定：
- *  - num = 1 -> 使用 TIM3（一般接电机1，PA6/PA7）
- *  - num = 2 -> 使用 TIM4（一般接电机2，PB6/PB7）
+ * 硬件约定：
+ *   左轮编码器：TIM3，通道1/2，PA6 / PA7
+ *   右轮编码器：TIM1，通道1/2，PA8 / PA9
  * ========================================================== */
 
-/* 累计位置（从清零开始，累加每次的脉冲增量） */
-static int32_t encoder_pos1 = 0;
-static int32_t encoder_pos2 = 0;
+/* 兼容你同学写法的结构体实例 */
+Encoder_TypeDef left_encoder  = {0, 0};
+Encoder_TypeDef right_encoder = {0, 0};
 
-/* 上一次读取到的定时器计数值，用于做差计算“增量” */
-static int32_t prev_count1 = 0;
-static int32_t prev_count2 = 0;
+/* 软件累计位置（从上电/清零开始累计的脉冲数） */
+static int32_t encoder_pos1 = 0;   // 左轮
+static int32_t encoder_pos2 = 0;   // 右轮
 
-/**
- * @brief 编码器初始化函数
- *
- * 配置内容：
- *  - GPIOA6 / GPIOA7 用作 TIM3 编码器输入（电机1）
- *  - GPIOB6 / GPIOB7 用作 TIM4 编码器输入（电机2）
- *  - TIM3 / TIM4 工作在 Encoder Interface Mode TI12
- *  - 计数器范围 0~0xFFFF，向上计数
- */
+/* 上一次读取到的定时器计数值，用来做差得到“增量” */
+static int32_t prev_count1 = 0;    // TIM3 上一次计数
+static int32_t prev_count2 = 0;    // TIM1 上一次计数
+
+/* 溢出判定相关常量（16 位计数器 0~65535） */
+#define ENCODER_OVERFLOW_THRESHOLD  32768   // 超过这个值认为发生溢出
+#define ENCODER_MAX_COUNT           65536   // 2^16
+
+/* ==========================================================
+ * 编码器初始化
+ * ========================================================== */
 void Encoder_Init(void)
 {
     GPIO_InitTypeDef        GPIO_InitStructure;
     TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
 
-    /* 1. 打开 GPIOA / GPIOB 和 TIM3 / TIM4 的时钟 */
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB, ENABLE);
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3 | RCC_APB1Periph_TIM4, ENABLE);
-
-    /* 2. 配置编码器引脚为上拉输入
-     *    理论上也可以配置为浮空输入，根据具体硬件决定。
+    /* 1. 使能 GPIOA、TIM3、TIM1 时钟
+     *    - TIM3 在 APB1 总线
+     *    - TIM1 在 APB2 总线
      */
-    GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_IPU;      // 上拉输入
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_TIM1, ENABLE);
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
+
+    /* 2. 配置 PA6/7/8/9 为上拉输入（编码器 A/B 相） */
+    GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_IPU;      // 上拉输入，空闲时为高电平
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 
-    /* 电机1：TIM3 的 A/B 相：PA6 / PA7 */
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
+    // 左轮：PA6 / PA7 -> TIM3_CH1 / TIM3_CH2
+    GPIO_InitStructure.GPIO_Pin   = GPIO_Pin_6 | GPIO_Pin_7;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
-    /* 电机2：TIM4 的 A/B 相：PB6 / PB7 */
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+    // 右轮：PA8 / PA9 -> TIM1_CH1 / TIM1_CH2
+    GPIO_InitStructure.GPIO_Pin   = GPIO_Pin_8 | GPIO_Pin_9;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
 
-    /* 3. 配置 TIM3 / TIM4 的基本计数参数 */
-    TIM_TimeBaseStructure.TIM_Prescaler     = 0;               // 不分频，直接计数
-    TIM_TimeBaseStructure.TIM_Period        = 0xFFFF;          // 16 位计数器最大值
+    /* 3. 配置 TIM3 / TIM1 的计数器参数 */
+    TIM_TimeBaseStructure.TIM_Prescaler     = 0;              // 不分频
+    TIM_TimeBaseStructure.TIM_Period        = 0xFFFF;         // 16 位最大计数
     TIM_TimeBaseStructure.TIM_CounterMode   = TIM_CounterMode_Up;
     TIM_TimeBaseStructure.TIM_ClockDivision = 0;
 
-    /* 配置 TIM3 为编码器模式（电机1） */
+    /* ---- 左轮：TIM3 编码器模式 ---- */
     TIM_TimeBaseInit(TIM3, &TIM_TimeBaseStructure);
-    /* TI12 模式：使用 TI1 和 TI2 两路输入，A/B 相共同决定计数方向 */
     TIM_EncoderInterfaceConfig(TIM3,
-                               TIM_EncoderMode_TI12,
-                               TIM_ICPolarity_Rising,   // A 相上升沿
-                               TIM_ICPolarity_Rising);  // B 相上升沿
+                               TIM_EncoderMode_TI12,          // 使用 CH1/CH2 两路
+                               TIM_ICPolarity_Rising,
+                               TIM_ICPolarity_Rising);
     TIM_SetCounter(TIM3, 0);
     TIM_Cmd(TIM3, ENABLE);
 
-    /* 配置 TIM4 为编码器模式（电机2） */
-    TIM_TimeBaseInit(TIM4, &TIM_TimeBaseStructure);
-    TIM_EncoderInterfaceConfig(TIM4,
+    /* ---- 右轮：TIM1 编码器模式 ---- */
+    TIM_TimeBaseInit(TIM1, &TIM_TimeBaseStructure);
+    TIM_EncoderInterfaceConfig(TIM1,
                                TIM_EncoderMode_TI12,
                                TIM_ICPolarity_Rising,
                                TIM_ICPolarity_Rising);
-    TIM_SetCounter(TIM4, 0);
-    TIM_Cmd(TIM4, ENABLE);
+    TIM_SetCounter(TIM1, 0);
+    TIM_Cmd(TIM1, ENABLE);
 
-    /* 4. 初始化“上一次计数”的起点 */
-    prev_count1 = TIM_GetCounter(TIM3);
-    prev_count2 = TIM_GetCounter(TIM4);
+    /* 4. 软件变量初始化 */
+    prev_count1    = (int16_t)TIM_GetCounter(TIM3);
+    prev_count2    = (int16_t)TIM_GetCounter(TIM1);
+    encoder_pos1   = 0;
+    encoder_pos2   = 0;
 
-    /* 同时把累计位置清零 */
-    encoder_pos1 = 0;
-    encoder_pos2 = 0;
+    left_encoder.count  = 0;
+    left_encoder.speed  = 0;
+    right_encoder.count = 0;
+    right_encoder.speed = 0;
 }
 
-/**
- * @brief 获取编码器速度（每次调用间隔的脉冲数）
- *
- * @param num 编码器编号：
- *            1 -> TIM3 对应的编码器
- *            2 -> TIM4 对应的编码器
- *
- * @return 速度值（单位：脉冲数/调用间隔），带符号，用于区分正反转方向
- *
- * 原理说明：
- *  1. 读取当前 TIMx 的计数值 current_count
- *  2. 和上一次的 prev_count 做差 delta = current_count - prev_count
- *  3. 若中间发生 16 位溢出，会出现“差值特别大”，
- *     - 当 delta >  32768 时，认为是向负方向溢出一次，做 delta -= 65536
- *     - 当 delta < -32768 时，认为是向正方向溢出一次，做 delta += 65536
- *  4. 把 delta 累加到 encoder_posX 中，得到“累计位置”
- *  5. 返回 delta * 1.85f 作为速度值
- */
+
 int16_t Encoder_Get_Speed(uint8_t num)
 {
-    int32_t current_count = 0;     //用32位做中间计算
-    int32_t delta         = 0;
+    int32_t current = 0;
+    int32_t delta   = 0;
 
-    if (num == 1)
+    /* -------- 左轮：TIM3 -------- */
+    if (num == ENCODER_M1 || num == 1)
     {
-        /* 读取 TIM3 当前计数并与上次值做差 */
-        current_count = (int16_t)TIM_GetCounter(TIM3);   //TIM_GetCounter  返回本来就是16
-        delta         = current_count - prev_count1;
-        prev_count1   = current_count;
+        /* 1. 当前计数值（强转为有符号，用来做差） */
+        current = (int16_t)TIM_GetCounter(TIM3);
 
-        /* 溢出修正：
-         *  - 计数器是 0~65535
-         *  - 正常情况下，两次调用间隔内的增量不会非常大
-         *  - 当 delta >  32768，说明可能从低位绕回高位（负方向溢出）
-         *    -> 减去 65536，相当于 delta = delta - 2^16
-         *  - 当 delta < -32768，说明可能从高位绕回低位（正方向溢出）
-         *    -> 加上 65536，相当于 delta = delta + 2^16
-         */
-        if (delta > 32768)  delta -= 65536;
-        if (delta < -32768) delta += 65536;
+        /* 2. 与上一次计数做差得到本次“增量” */
+        delta   = current - prev_count1;
+        prev_count1 = current;
 
-        /* 累加到电机1的“总位置” */
+        /* 3. 处理 16 位溢出 */
+        if (delta > ENCODER_OVERFLOW_THRESHOLD)
+        {
+            delta -= ENCODER_MAX_COUNT;   // 低位绕到高位（负向溢出）
+        }
+        else if (delta < -ENCODER_OVERFLOW_THRESHOLD)
+        {
+            delta += ENCODER_MAX_COUNT;   // 高位绕到低位（正向溢出）
+        }
+
+        /* 4. 累加到“总位置” */
         encoder_pos1 += delta;
-    }
-    else if (num == 2)
-    {
-        /* 读取 TIM4 当前计数并与上次值做差 */
-        current_count = (int16_t)TIM_GetCounter(TIM4);
-        delta         = current_count - prev_count2;
-        prev_count2   = current_count;
 
-        if (delta > 32768)  delta -= 65536;
-        if (delta < -32768) delta += 65536;
+        /* 5. 更新兼容结构体 */
+        left_encoder.count = encoder_pos1;
+        left_encoder.speed = (int16_t)(delta * 1.85f);
+
+        /* 6. 返回速度值 */
+        return left_encoder.speed;
+    }
+
+    /* -------- 右轮：TIM1 -------- */
+    else if (num == ENCODER_M2 || num == 2)
+    {
+        current = (int16_t)TIM_GetCounter(TIM1);
+        delta   = current - prev_count2;
+        prev_count2 = current;
+
+        if (delta > ENCODER_OVERFLOW_THRESHOLD)
+        {
+            delta -= ENCODER_MAX_COUNT;
+        }
+        else if (delta < -ENCODER_OVERFLOW_THRESHOLD)
+        {
+            delta += ENCODER_MAX_COUNT;
+        }
 
         encoder_pos2 += delta;
-    }
-    else
-    {
-        /* num 传错时，直接返回 0 */
-        delta = 0;
+
+        right_encoder.count = encoder_pos2;
+        right_encoder.speed = (int16_t)(delta * 1.85f);
+
+        return right_encoder.speed;
     }
 
-
-    return (int16_t)(delta * 1.85f);
+    /* 编号写错，直接返回 0 */
+    return 0;
 }
 
-/**
- * @brief 获取编码器累计位置（相对值）
- *
- * @param num 编码器编号（1 或 2）
- * @return 从 Encoder_Init 或 Encoder_Clear_TotalCount 以来的总脉冲数
- *
- * 说明：
- *  - 这个值等于每次 Encoder_Get_Speed() 返回的“delta”不断累加的结果。
- *  - 可以用于位置环控制、转过多少圈等计算。
- */
+/* ==========================================================
+ * 获取累计位置（注意：只有在调用过 Encoder_Get_Speed 后才会更新）
+ * ========================================================== */
 int32_t Encoder_Get_Position(uint8_t num)
 {
-    if (num == 1)
+    if (num == ENCODER_M1 || num == 1)
     {
         return encoder_pos1;
     }
-    else if (num == 2)
+    else if (num == ENCODER_M2 || num == 2)
     {
         return encoder_pos2;
     }
@@ -178,30 +171,55 @@ int32_t Encoder_Get_Position(uint8_t num)
     }
 }
 
-/**
- * @brief 清零某一路编码器的累计位置
- *
- * @param num 编码器编号（1 或 2）
- *
- * 使用场景：
- *  - 例如小车刚对好起跑线，需要把当前位置当作“0点”；
- *  - 切换位置控制的目标点时，也可以重置累计位置。
- *
- * 实现说明：
- *  - 把 encoder_posX 置 0；
- *  - 同时把 prev_countX 更新为当前 TIM 计数值，
- *    这样下一次调用 Encoder_Get_Speed() 时不会出现一个很大的“跳变”。
- */
+/* ==========================================================
+ * 清零某一路编码器的累计位置和“上次计数值”
+ * ========================================================== */
 void Encoder_Clear_TotalCount(uint8_t num)
 {
-    if (num == 1)
+    if (num == ENCODER_M1 || num == 1)
     {
         encoder_pos1 = 0;
         prev_count1  = (int16_t)TIM_GetCounter(TIM3);
+
+        left_encoder.count = 0;
+        left_encoder.speed = 0;
     }
-    else if (num == 2)
+    else if (num == ENCODER_M2 || num == 2)
     {
         encoder_pos2 = 0;
-        prev_count2  = (int16_t)TIM_GetCounter(TIM4);
+        prev_count2  = (int16_t)TIM_GetCounter(TIM1);
+
+        right_encoder.count = 0;
+        right_encoder.speed = 0;
     }
+}
+
+
+
+int32_t Encoder_Get_Left_Count(void)
+{
+    return (int32_t)(int16_t)TIM_GetCounter(TIM3);
+}
+
+int32_t Encoder_Get_Right_Count(void)
+{
+    return (int32_t)(int16_t)TIM_GetCounter(TIM1);
+}
+
+void Encoder_Reset_Both(void)
+{
+    /* 清硬件计数器 */
+    TIM_SetCounter(TIM3, 0);
+    TIM_SetCounter(TIM1, 0);
+
+    /* 清软件变量 */
+    encoder_pos1 = 0;
+    encoder_pos2 = 0;
+    prev_count1  = 0;
+    prev_count2  = 0;
+
+    left_encoder.count = 0;
+    left_encoder.speed = 0;
+    right_encoder.count = 0;
+    right_encoder.speed = 0;
 }

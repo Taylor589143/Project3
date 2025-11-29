@@ -14,4 +14,8 @@ void OLED_ShowBinNum(uint8_t Line, uint8_t Column, uint32_t Number, uint8_t Leng
 
 void OLED_ShowFloat(uint8_t Line, uint8_t Column, float Number,uint8_t Intlength, uint8_t FracLength);
 
+// 新增OLED关闭功能
+void OLED_Off(void);
+void OLED_On(void);
+
 #endif

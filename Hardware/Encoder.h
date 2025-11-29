@@ -4,21 +4,41 @@
 #include "stm32f10x.h"
 
 
-#define ENCODER_M1   1U   //左电机（电机1）
-#define ENCODER_M2   2U   //右电机（电机2）
+#define ENCODER_M1   1U   // 左电机
+#define ENCODER_M2   2U   // 右电机
 
-/* ==========================================================
- * 编码器模块接口说明
- * 
- * - Encoder_Init()               初始化 TIM3/TIM4 编码器接口
- * - Encoder_Get_Speed(num)       获取当前速度（单位：脉冲/10ms）
- * - Encoder_Get_Position(num)    获取累计位置脉冲
- * - Encoder_Clear_TotalCount(num)清零累计位置
- * ========================================================== */
 
-void Encoder_Init(void);
+/* 左编码器 A/B 相 */
+#define LEFT_ENCODER_A_PIN     GPIO_Pin_6
+#define LEFT_ENCODER_A_PORT    GPIOA
+#define LEFT_ENCODER_B_PIN     GPIO_Pin_7
+#define LEFT_ENCODER_B_PORT    GPIOA
+
+/* 右编码器 A/B 相 */
+#define RIGHT_ENCODER_A_PIN    GPIO_Pin_8    // A 相
+#define RIGHT_ENCODER_A_PORT   GPIOA
+#define RIGHT_ENCODER_B_PIN    GPIO_Pin_9    // B 相（从 PA11 改到 PA9）
+#define RIGHT_ENCODER_B_PORT   GPIOA
+
+typedef struct
+{
+    int32_t count;   // 计数器当前值（或累计值）
+    int16_t speed;   // 最近一次计算出来的速度
+} Encoder_TypeDef;
+
+
+extern Encoder_TypeDef left_encoder;
+extern Encoder_TypeDef right_encoder;
+
+
+
+void    Encoder_Init(void);
 int16_t Encoder_Get_Speed(uint8_t num);
 int32_t Encoder_Get_Position(uint8_t num);
-void Encoder_Clear_TotalCount(uint8_t num);
+void    Encoder_Clear_TotalCount(uint8_t num);
+
+int32_t Encoder_Get_Left_Count(void);
+int32_t Encoder_Get_Right_Count(void);
+void    Encoder_Reset_Both(void);
 
 #endif
